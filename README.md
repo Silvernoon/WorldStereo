@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <a href="https://arxiv.org/abs/2602.24233"><img src="https://img.shields.io/badge/arXiv-2602.24233-b31b1b.svg" alt="arXiv"></a>
+  <a href="https://arxiv.org/abs/2603.02049"><img src="https://img.shields.io/badge/arXiv-2603.02049-b31b1b.svg" alt="arXiv"></a>
   <a href="https://huggingface.co/hanshanxue/WorldStereo"><img src="https://img.shields.io/badge/🤗-Model_Weights-yellow.svg" alt="HuggingFace"></a>
   <img src="https://img.shields.io/badge/CVPR-2026-blue.svg" alt="CVPR 2026">
 </p>
@@ -34,7 +34,7 @@
 ## 📅 News
 
 - `[2026.02]` 🎉 WorldStereo is accepted by **CVPR 2026**!
-- `[2026.03]` 📄 Paper is now available on arXiv: [https://arxiv.org/abs/2602.24233](https://arxiv.org/abs/2602.24233)
+- `[2026.03]` 📄 Paper is now available on arXiv: [https://arxiv.org/abs/2603.02049](https://arxiv.org/abs/2603.02049)
 - `[2026.04]` 🚀 Code and model weights of WorldStereo 2.0 are now released!
 - `[2026.04]` 🚀 HY-World 2.0 are now released: [https://github.com/Tencent-Hunyuan/HY-World-2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) !
 
