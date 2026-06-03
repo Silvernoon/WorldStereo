@@ -124,6 +124,9 @@ class WorldStereo:
         fsdp: bool = False,
         device_mesh=None,
         device: torch.device | None = None,
+        quantize_w8a8: bool = False,
+        quantize_transformer_only: bool = True,
+        w8a8_save_path: str | None = None,
     ) -> "WorldStereo":
         """
         Build a WorldStereo instance from Hugging Face format
@@ -137,6 +140,19 @@ class WorldStereo:
             fsdp: Wrap models with PyTorch FSDP.  Requires ``device_mesh``.
             device_mesh: ``DeviceMesh`` with dims ``("rep", "shard")``.
             device: Target CUDA device.
+            quantize_w8a8: Apply W8A8 (INT8 weight + INT8 dynamic activation) quantization to the
+                transformer (and optionally aux models) via ``torchao``.  Requires
+                ``pip install torchao`` and a CUDA GPU with SM ≥ 80 (e.g. A100 / RTX 3090/4090).
+                Reduces VRAM by ~50 % with minimal quality loss.
+            quantize_transformer_only: When ``quantize_w8a8=True``, only quantize the DiT
+                transformer (default).  Set to ``False`` to also quantize the VAE and text/image
+                encoders – further saves VRAM but may slightly affect quality.
+            w8a8_save_path: Optional file path (e.g. ``"quantized/transformer_w8a8.pt"``).
+                • If the file **does not exist** and ``quantize_w8a8=True``, the quantized
+                  transformer is saved there after quantization (rank-0 only).
+                • If the file **already exists**, it is loaded directly, skipping re-quantization
+                  (much faster cold start).  ``quantize_w8a8`` must still be ``True`` so the
+                  model architecture is prepared correctly before loading.
         """
         if os.path.isdir(repo_id):
             json_cfg_path = os.path.join(repo_id, subfolder, "config.json")
@@ -179,11 +195,19 @@ class WorldStereo:
             fsdp=fsdp,
             device_mesh=device_mesh,
             device=device,
+            quantize_w8a8=quantize_w8a8,
+            w8a8_save_path=w8a8_save_path,
         )
 
         text_encoder, image_clip, vae = cls._load_aux(
             cfg, device=device, device_mesh=device_mesh, fsdp=fsdp, local_files_only=local_files_only
         )
+
+        # Optionally extend W8A8 quantization to aux models (VAE + encoders)
+        if quantize_w8a8 and not quantize_transformer_only:
+            cls._apply_w8a8(text_encoder, label="text_encoder")
+            cls._apply_w8a8(image_clip, label="image_clip")
+            cls._apply_w8a8(vae, label="vae")
         image_processor = CLIPImageProcessor.from_pretrained(
             cfg.base_model, do_rescale=False, subfolder="image_processor", local_files_only=local_files_only
         )
@@ -236,6 +260,87 @@ class WorldStereo:
 
         return cfg
 
+    # ------------------------------------------------------------------
+    # W8A8 quantization helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _apply_w8a8(model: torch.nn.Module, label: str = "model") -> None:
+        """Apply torchao W8A8 (INT8 dynamic activation + INT8 weight) quantization in-place.
+
+        Only ``nn.Linear`` layers with both input and output features ≥ 16 are
+        quantized; smaller projections (e.g. norm biases, tiny heads) are skipped
+        automatically by torchao.
+
+        Requires ``pip install torchao`` and CUDA SM ≥ 80.
+        """
+        try:
+            from torchao.quantization import quantize_, int8_dynamic_activation_int8_weight
+        except ImportError as exc:
+            raise ImportError(
+                "W8A8 quantization requires torchao.  "
+                "Install it with:  pip install torchao"
+            ) from exc
+
+        rank0_log(f"Applying W8A8 quantization to {label}…")
+        quantize_(model, int8_dynamic_activation_int8_weight())
+        rank0_log(f"W8A8 quantization done for {label}.")
+
+    @staticmethod
+    def save_w8a8(
+        model: torch.nn.Module,
+        save_path: str,
+        *,
+        rank: int = 0,
+    ) -> None:
+        """Serialize a torchao-quantized model to ``save_path`` (a ``.pt`` file).
+
+        Only rank-0 writes to disk in distributed settings.
+
+        Args:
+            model: A quantized ``nn.Module`` (output of ``_apply_w8a8``).
+            save_path: Destination file path, e.g. ``"quantized/transformer_w8a8.pt"``.
+            rank: Current distributed rank; only rank 0 writes.
+        """
+        try:
+            from torchao.quantization import quantized_decomposed  # noqa: F401 – registers ops
+            from torchao._torchao_C import torchao as _  # noqa: F401
+        except ImportError:
+            pass  # older torchao versions don't need this
+
+        if rank != 0:
+            return
+
+        os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+        rank0_log(f"Saving W8A8 quantized model to {save_path}…")
+        torch.save(model.state_dict(), save_path)
+        rank0_log(f"Saved → {save_path}")
+
+    @staticmethod
+    def _load_w8a8_checkpoint(
+        model: torch.nn.Module,
+        load_path: str,
+        device: torch.device,
+    ) -> torch.nn.Module:
+        """Reload a previously saved W8A8 state-dict back into a fresh *quantized* model.
+
+        The model must already have been quantized with ``_apply_w8a8`` before
+        calling this (so the parameter layout matches the saved state-dict).
+
+        Args:
+            model: Already-quantized model whose weights will be overwritten.
+            load_path: Path to the ``.pt`` file written by :meth:`save_w8a8`.
+            device: Target device.
+
+        Returns:
+            The same ``model`` with weights loaded from disk.
+        """
+        rank0_log(f"Loading W8A8 checkpoint from {load_path}…")
+        state_dict = torch.load(load_path, map_location=device, weights_only=True)
+        model.load_state_dict(state_dict, strict=True)
+        rank0_log("W8A8 checkpoint loaded.")
+        return model
+
     @staticmethod
     def _load_transformer(
         cfg,
@@ -246,6 +351,8 @@ class WorldStereo:
         fsdp: bool,
         device_mesh,
         device,
+        quantize_w8a8: bool = False,
+        w8a8_save_path: str | None = None,
     ):
 
         half_dtype = _get_half_dtype()
@@ -318,6 +425,8 @@ class WorldStereo:
         _summarize_keys(result.missing_keys, "Missing keys")
 
         if fsdp:
+            if quantize_w8a8:
+                rank0_log("W8A8 quantization is not compatible with FSDP – skipping quantization.", "WARNING")
             fsdp_kwargs = dict(
                 mp_policy=MixedPrecisionPolicy(
                     param_dtype=half_dtype,
@@ -335,6 +444,22 @@ class WorldStereo:
             rank0_log("FSDP wrapping done for transformer.")
         else:
             transformer = transformer.to(device=device)
+            # ── W8A8 量化（torchao）─────────────────────────────────────
+            if quantize_w8a8:
+                cached = (
+                    w8a8_save_path is not None
+                    and os.path.isfile(w8a8_save_path)
+                )
+                if cached:
+                    # Fast path: architecture must be quantized first so layer
+                    # types match the saved state-dict, then overwrite weights.
+                    WorldStereo._apply_w8a8(transformer, label="transformer (layout)")
+                    WorldStereo._load_w8a8_checkpoint(transformer, w8a8_save_path, device)
+                else:
+                    WorldStereo._apply_w8a8(transformer, label="transformer")
+                    if w8a8_save_path is not None:
+                        rank = dist.get_rank() if dist.is_initialized() else 0
+                        WorldStereo.save_w8a8(transformer, w8a8_save_path, rank=rank)
 
         gc.collect()
         torch.cuda.empty_cache()

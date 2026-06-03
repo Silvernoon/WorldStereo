@@ -27,6 +27,16 @@ if __name__ == '__main__':
     parser.add_argument("--align_nframe", type=int, default=8, help="Saving number of frames for each video clip")
     parser.add_argument("--local_files_only", action="store_true", help="If True, avoid downloading the file and return the path to the local cached file if it exists.")
     parser.add_argument("--fsdp", action="store_true", help="Enable FSDP model sharding")
+    parser.add_argument("--w8a8", action="store_true",
+                        help="Apply W8A8 (INT8 weight + INT8 dynamic activation) quantization to the "
+                             "transformer via torchao. Reduces VRAM by ~50%%. Requires: pip install torchao")
+    parser.add_argument("--w8a8_all", action="store_true",
+                        help="Extend W8A8 quantization to VAE and text/image encoders in addition to the transformer")
+    parser.add_argument("--w8a8_save_path", type=str, default=None,
+                        help="Path to save (or load) the W8A8-quantized transformer checkpoint, e.g. "
+                             "'quantized/transformer_w8a8.pt'. "
+                             "On first run the quantized weights are saved here; on subsequent runs "
+                             "they are loaded directly, skipping re-quantization.")
     parser.add_argument("--seed", default=1024, type=int, help="Random seed")
     args = parser.parse_args()
 
@@ -72,6 +82,9 @@ if __name__ == '__main__':
         fsdp=args.fsdp,
         device_mesh=device_mesh,
         device=device,
+        quantize_w8a8=args.w8a8 or args.w8a8_all,
+        quantize_transformer_only=not args.w8a8_all,
+        w8a8_save_path=args.w8a8_save_path,
     )
 
     # ── inference ──────────────────────────────────────────────────────
