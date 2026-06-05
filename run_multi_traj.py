@@ -22,6 +22,9 @@ if __name__ == '__main__':
     parser.add_argument("--model_type", type=str, default="worldstereo-memory-dmd", choices=["worldstereo-memory", "worldstereo-memory-dmd"],
                         help="Model type (e.g., 'worldstereo-memory', 'worldstereo-memory-dmd')")
     parser.add_argument("--task_type", type=str, default="panorama", choices=["panorama", "reconstruction"], help="task type")
+    parser.add_argument("--model_path", type=str, default="hanshanxue/WorldStereo",
+                        help="Model location: either a Hugging Face repo ID (default 'hanshanxue/WorldStereo') "
+                             "or a local directory containing the <model_type> subfolder with config.json + model.safetensors")
     parser.add_argument("--input_path", type=str, default="examples/panorama", help="panoramic input path")
     parser.add_argument("--output_path", type=str, default="outputs", help="Target path for output results")
     parser.add_argument("--align_nframe", type=int, default=8, help="Saving number of frames for each video clip")
@@ -75,7 +78,7 @@ if __name__ == '__main__':
     torch.set_default_dtype(torch.float32)
 
     worldstereo = WorldStereo.from_pretrained(
-        "hanshanxue/WorldStereo",
+        args.model_path,
         subfolder=args.model_type,
         local_files_only=args.local_files_only,
         sp_world_size=sp_size,

@@ -18,6 +18,9 @@ if __name__ == '__main__':
     parser.add_argument("--model_type", type=str, default="worldstereo-camera",
                         choices=["worldstereo-camera", "worldstereo-memory", "worldstereo-memory-dmd"],
                         help="Model type (e.g., 'worldstereo-camera', 'worldstereo-memory', 'worldstereo-memory-dmd')")
+    parser.add_argument("--model_path", type=str, default="hanshanxue/WorldStereo",
+                        help="Model location: either a Hugging Face repo ID (default 'hanshanxue/WorldStereo') "
+                             "or a local directory containing the <model_type> subfolder with config.json + model.safetensors")
     parser.add_argument("--input_path", type=str, default="examples/images", help="image input path")
     parser.add_argument("--output_path", type=str, default="outputs", help="Target path for output results")
     parser.add_argument("--local_files_only", action="store_true", help="If True, avoid downloading the file and return the path to the local cached file if it exists.")
@@ -70,7 +73,7 @@ if __name__ == '__main__':
     torch.set_default_dtype(torch.float32)
 
     worldstereo = WorldStereo.from_pretrained(
-        "hanshanxue/WorldStereo",
+        args.model_path,
         subfolder=args.model_type,
         local_files_only=args.local_files_only,
         sp_world_size=sp_size,
