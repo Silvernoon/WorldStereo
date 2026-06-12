@@ -443,8 +443,12 @@ class WorldStereo:
             fully_shard(transformer, **fsdp_kwargs)
             rank0_log("FSDP wrapping done for transformer.")
         else:
-            transformer = transformer.to(device=device)
             # ── W8A8 量化（torchao）─────────────────────────────────────
+            # IMPORTANT: quantize on CPU *before* moving to GPU.  Moving the
+            # full bf16 model to the device first would peak at the full
+            # (unquantized) memory footprint and OOM on smaller cards –
+            # defeating the purpose of W8A8.  By quantizing first, only the
+            # ~2x smaller int8 model is ever materialized on the GPU.
             if quantize_w8a8:
                 cached = (
                     w8a8_save_path is not None
@@ -454,12 +458,16 @@ class WorldStereo:
                     # Fast path: architecture must be quantized first so layer
                     # types match the saved state-dict, then overwrite weights.
                     WorldStereo._apply_w8a8(transformer, label="transformer (layout)")
+                    transformer = transformer.to(device=device)
                     WorldStereo._load_w8a8_checkpoint(transformer, w8a8_save_path, device)
                 else:
                     WorldStereo._apply_w8a8(transformer, label="transformer")
+                    transformer = transformer.to(device=device)
                     if w8a8_save_path is not None:
                         rank = dist.get_rank() if dist.is_initialized() else 0
                         WorldStereo.save_w8a8(transformer, w8a8_save_path, rank=rank)
+            else:
+                transformer = transformer.to(device=device)
 
         gc.collect()
         torch.cuda.empty_cache()

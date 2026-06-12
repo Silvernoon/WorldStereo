@@ -1,0 +1,40 @@
+# WorldStereo model configuration
+# Equivalent to FastWAM's model config structure
+
+_target_: worldstereo_wam.runtime.create_worldstereo
+model_path: hanshanxue/WorldStereo
+model_type: worldstereo-memory-dmd
+
+# Model loading options
+local_files_only: false
+sp_world_size: 1
+fsdp: false
+device: cuda
+
+# Quantization
+quantize_w8a8: false
+quantize_transformer_only: true
+w8a8_save_path: null
+
+# Base model configuration (from HuggingFace config.json)
+base_model: Wan-AI/Wan2.2-T2V-14B
+
+# ControlNet configuration
+controlnet_cfg:
+  in_channels: 48
+  conditioning_channels: 24
+  conditioning_embedding_out_channels: [24, 48, 48]
+  block_out_channels: [48]
+  controlnet_block_num: 14
+  attention_head_dim: 128
+  freq_dim: 256
+  ffn_dim: 14336
+  text_dim: 4096
+  num_attention_heads: 40
+
+# Training-specific options
+freeze_backbone: true
+
+# Inference options
+latent_cond_mode: pcd_cond
+negative_prompt: "Aerial view, aerial view, aerial view, oversaturated, blurry, out of focus, low resolution, distorted"
