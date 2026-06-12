@@ -84,6 +84,10 @@ if __name__ == '__main__':
         quantize_transformer_only=not args.w8a8_all,
         w8a8_save_path=args.w8a8_save_path,
     )
+    
+    # Clear GPU cache before loading depth model to avoid memory issues
+    torch.cuda.empty_cache()
+    
     # moge is used for warp rendering
     depth_model = MoGeModel.from_pretrained("Ruicheng/moge-2-vitl-normal").to(device).eval()
 

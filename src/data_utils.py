@@ -238,6 +238,10 @@ def load_single_view_data(cfg, input_path, output_path, model_type, depth_model,
 
     # load conditions
     # predict depth via moge
+    # Synchronize CUDA to catch any previous errors and clear cache
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    
     depth_pred = depth_model.infer(transforms.ToTensor()(pil_image)[None].to(device))
     depth_mask = depth_pred["mask"][0]
     depth = depth_pred["depth"][0].clone()
