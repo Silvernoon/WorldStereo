@@ -162,7 +162,18 @@ class KFPCDControllerPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
         seq_lens = mask.gt(0).sum(dim=1).long()
 
+        # Temporarily move text_encoder to GPU if it's on CPU
+        text_encoder_device = next(self.text_encoder.parameters()).device
+        if text_encoder_device != device:
+            self.text_encoder.to(device)
+        
         prompt_embeds = self.text_encoder(text_input_ids.to(device), mask.to(device)).last_hidden_state
+        
+        # Move text_encoder back to CPU to free GPU memory
+        if text_encoder_device != device:
+            self.text_encoder.to(text_encoder_device)
+            torch.cuda.empty_cache()
+        
         prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
         prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
         prompt_embeds = torch.stack(
@@ -183,8 +194,21 @@ class KFPCDControllerPipeline(DiffusionPipeline, WanLoraLoaderMixin):
     ):
         device = device or self._execution_device
         image = self.image_processor(images=image, return_tensors="pt").to(device)
+        
+        # Temporarily move image_encoder to GPU if it's on CPU
+        image_encoder_device = next(self.image_encoder.parameters()).device
+        if image_encoder_device != device:
+            self.image_encoder.to(device)
+        
         image_embeds = self.image_encoder(**image, output_hidden_states=True)
-        return image_embeds.hidden_states[-2]
+        result = image_embeds.hidden_states[-2]
+        
+        # Move image_encoder back to CPU to free GPU memory
+        if image_encoder_device != device:
+            self.image_encoder.to(image_encoder_device)
+            torch.cuda.empty_cache()
+        
+        return result
 
     # Copied from diffusers.pipelines.wan.pipeline_wan.WanPipeline.encode_prompt
     def encode_prompt(

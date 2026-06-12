@@ -577,8 +577,11 @@ class WorldStereo:
             gc.collect()
             torch.cuda.empty_cache()
         else:
-            text_encoder = text_encoder.to(device=device)
-            image_clip = image_clip.to(device=device)
+            # Keep text_encoder and image_clip on CPU to save GPU memory
+            # They will be moved to GPU on-demand during inference via enable_model_cpu_offload()
+            rank0_log("Keeping text_encoder and image_clip on CPU for memory efficiency")
+            text_encoder = text_encoder.to(device="cpu")
+            image_clip = image_clip.to(device="cpu")
 
         vae = vae.to(device=device)
         return text_encoder, image_clip, vae
