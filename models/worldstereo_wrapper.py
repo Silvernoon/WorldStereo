@@ -376,6 +376,16 @@ class WorldStereo:
         rank0_log("Building ControlNet…")
         transformer.build_controlnet(load_uni3c=False, freeze_backbone=cfg.freeze_backbone)
 
+        # When a W8A8 cache already exists, loading the bf16 ``model.safetensors``
+        # weights below is pure waste: every parameter is overwritten by the
+        # cached int8 state-dict a few lines later.  Skip the ~14 GB read entirely.
+        w8a8_cached = (
+            quantize_w8a8
+            and not fsdp
+            and w8a8_save_path is not None
+            and os.path.isfile(w8a8_save_path)
+        )
+
         if sp_world_size > 1:
             transformer.sp_size = sp_world_size
             for layer in transformer.controlnet.controlnet_blocks:
@@ -386,10 +396,16 @@ class WorldStereo:
                 else:
                     block.attn1.processor.sp_size = sp_world_size
 
-        rank0_log(f"Loading HF safetensors weights from {weights_path}…")
-        weights = load_safetensors(weights_path, device="cpu")
+        if w8a8_cached:
+            rank0_log(
+                f"W8A8 cache found at {w8a8_save_path} — skipping HF safetensors "
+                f"load ({weights_path}); cached int8 weights will be used directly."
+            )
+        else:
+            rank0_log(f"Loading HF safetensors weights from {weights_path}…")
+            weights = load_safetensors(weights_path, device="cpu")
 
-        result = transformer.load_state_dict(weights, strict=False)
+            result = transformer.load_state_dict(weights, strict=False)
 
         def _summarize_keys(keys: list[str], label: str) -> None:
             if not keys:
@@ -421,8 +437,9 @@ class WorldStereo:
             )
             rank0_log(f"These are frozen backbone weights initialized by the base video model ({cfg.base_model}).")
 
-        _summarize_keys(result.unexpected_keys, "Unexpected keys")
-        _summarize_keys(result.missing_keys, "Missing keys")
+        if not w8a8_cached:
+            _summarize_keys(result.unexpected_keys, "Unexpected keys")
+            _summarize_keys(result.missing_keys, "Missing keys")
 
         if fsdp:
             if quantize_w8a8:
@@ -457,9 +474,19 @@ class WorldStereo:
                 if cached:
                     # Fast path: architecture must be quantized first so layer
                     # types match the saved state-dict, then overwrite weights.
+                    #
+                    # IMPORTANT: load the checkpoint *on CPU* and only then move
+                    # the single resulting model to the GPU.  Moving the model to
+                    # the device first and loading the state-dict with
+                    # map_location=device would momentarily hold two full int8
+                    # copies on the GPU (the model itself + the freshly loaded
+                    # state-dict), peaking at ~2x the model footprint and OOM-ing
+                    # on smaller cards.
                     WorldStereo._apply_w8a8(transformer, label="transformer (layout)")
+                    WorldStereo._load_w8a8_checkpoint(
+                        transformer, w8a8_save_path, torch.device("cpu")
+                    )
                     transformer = transformer.to(device=device)
-                    WorldStereo._load_w8a8_checkpoint(transformer, w8a8_save_path, device)
                 else:
                     WorldStereo._apply_w8a8(transformer, label="transformer")
                     transformer = transformer.to(device=device)
