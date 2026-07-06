@@ -12,12 +12,16 @@ from models.worldstereo_wrapper import WorldStereo
 from moge.model.v2 import MoGeModel
 from src.data_utils import load_single_view_data
 from diffusers.utils import export_to_video
+from eval.profiler import get_profiler
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_type", type=str, default="worldstereo-camera",
                         choices=["worldstereo-camera", "worldstereo-memory", "worldstereo-memory-dmd"],
                         help="Model type (e.g., 'worldstereo-camera', 'worldstereo-memory', 'worldstereo-memory-dmd')")
+    parser.add_argument("--model_path", type=str, default="hanshanxue/WorldStereo",
+                        help="Model location: either a Hugging Face repo ID (default 'hanshanxue/WorldStereo') "
+                             "or a local directory containing the <model_type> subfolder with config.json + model.safetensors")
     parser.add_argument("--input_path", type=str, default="examples/images", help="image input path")
     parser.add_argument("--output_path", type=str, default="outputs", help="Target path for output results")
     parser.add_argument("--local_files_only", action="store_true", help="If True, avoid downloading the file and return the path to the local cached file if it exists.")
@@ -70,7 +74,7 @@ if __name__ == '__main__':
     torch.set_default_dtype(torch.float32)
 
     worldstereo = WorldStereo.from_pretrained(
-        "hanshanxue/WorldStereo",
+        args.model_path,
         subfolder=args.model_type,
         local_files_only=args.local_files_only,
         sp_world_size=sp_size,
@@ -84,6 +88,10 @@ if __name__ == '__main__':
     # moge is used for warp rendering
     depth_model = MoGeModel.from_pretrained("Ruicheng/moge-2-vitl-normal").to(device).eval()
 
+    # ── efficiency profiling (no-op unless WORLDSTEREO_PROFILE set) ─────
+    prof = get_profiler(device)
+    prof.snapshot_model_memory()
+
     # ── inference ──────────────────────────────────────────────────────
     dist.barrier()
     generator = torch.Generator(device=device).manual_seed(args.seed)
@@ -96,6 +104,7 @@ if __name__ == '__main__':
     else:
         autocast_dtype = None  # no half-precision support, fall back to fp32
     rank0_log(f"Autocast dtype: {autocast_dtype if autocast_dtype else 'disabled (fp32)'}")
+    prof.reset_peak()
 
     # load data
     if os.path.exists(f"{args.input_path}/image.png"):
@@ -129,13 +138,15 @@ if __name__ == '__main__':
             else:
                 pipeline_kwargs["guidance_scale"] = 5.0
 
-            with torch.autocast("cuda", dtype=autocast_dtype, enabled=autocast_dtype is not None):
+            with prof.clip(), torch.autocast("cuda", dtype=autocast_dtype, enabled=autocast_dtype is not None):
                 output = worldstereo.pipeline(**pipeline_kwargs).frames[0].float()
             output = output.cpu().permute(0, 2, 3, 1).numpy()
             torch.cuda.empty_cache()
 
         if rank == 0:
             export_to_video(output, f"{output_path}/{args.model_type}_result.mp4", fps=16)
+
+    prof.finalize()
 
 
     if dist.is_initialized():
