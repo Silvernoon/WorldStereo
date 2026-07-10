@@ -148,12 +148,16 @@ if __name__ == '__main__':
             tar_w2cs = torch.from_numpy(np.array(target_cameras["extrinsic"])).to(dtype=torch.float32, device=device)
             tar_Ks = torch.from_numpy(np.array(target_cameras["intrinsic"])).to(dtype=torch.float32, device=device)
 
-            if os.path.exists(f"{output_path}/{view_id}/{traj_id}/{args.model_type}_result.mp4"):
+            result_mp4 = f"{output_path}/{view_id}/{traj_id}/{args.model_type}_result.mp4"
+            if os.path.exists(result_mp4):
                 # Only update the memory bank, skip inference
-                gen_frames = load_video(f"{output_path}/{view_id}/{traj_id}/{args.model_type}_result.mp4")
-                memory_bank.update_memory(gen_frames=gen_frames, tar_w2cs_full=tar_w2cs, tar_Ks_full=tar_Ks, view_id=view_id, traj_id=traj_id)
-                rank0_log(f"View: {view_id}, traj: {traj_id} is already exist. Updating memory bank and skipping.")
-                continue
+                gen_frames = load_video(result_mp4)
+                if len(gen_frames) > 0:
+                    memory_bank.update_memory(gen_frames=gen_frames, tar_w2cs_full=tar_w2cs, tar_Ks_full=tar_Ks, view_id=view_id, traj_id=traj_id)
+                    rank0_log(f"View: {view_id}, traj: {traj_id} is already exist. Updating memory bank and skipping.")
+                    continue
+                # Corrupt/truncated result (e.g. from an interrupted run): regenerate below
+                rank0_log(f"View: {view_id}, traj: {traj_id} result exists but decoded 0 frames; regenerating.")
 
             # retrieval and save related data
             retrieved_frames, ref_index, ref_index_dict, ref_w2cs, _ = memory_bank.retrieval(tar_w2cs, tar_Ks, view_id=view_id, traj_id=traj_id)
@@ -194,11 +198,11 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()
 
             if rank == 0:
-                export_to_video(output, f"{output_path}/{view_id}/{traj_id}/{args.model_type}_result.mp4", fps=16)
+                export_to_video(output, result_mp4, fps=16)
 
             dist.barrier()  # wait for save to complete
             # update memory bank
-            gen_frames = load_video(f"{output_path}/{view_id}/{traj_id}/{args.model_type}_result.mp4")
+            gen_frames = load_video(result_mp4)
             memory_bank.update_memory(gen_frames=gen_frames, tar_w2cs_full=tar_w2cs, tar_Ks_full=tar_Ks, view_id=view_id, traj_id=traj_id)
             dist.barrier()  # wait for update to complete
 
